@@ -19,7 +19,7 @@ type Models struct {
 	Tokens Token
 }
 
-func New(databasePool *sql.DB) Models {
+func New(databasePool *sql.DB) *Models {
 	db = databasePool
 
 	if os.Getenv("DATABASE_TYPE") == "mysql" || os.Getenv("DATABASE_TYPE") == "mariadb" {
@@ -32,7 +32,7 @@ func New(databasePool *sql.DB) Models {
 		upper, _ = sqlite.New(databasePool)
 
 	}
-	return Models{
+	return &Models{
 		Users:  User{},
 		Tokens: Token{},
 	}

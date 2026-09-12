@@ -10,7 +10,7 @@ import (
 type application struct {
 	App      *celeritas.Celeritas
 	Handlers *handlers.Handlers
-	Models   data.Models
+	Models   *data.Models
 }
 
 func main() {

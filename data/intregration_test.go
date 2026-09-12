@@ -8,8 +8,10 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	_ "github.com/jackc/pgconn"
 	_ "github.com/jackc/pgx/v4"
@@ -24,7 +26,7 @@ var (
 	user     = "postgres"
 	password = "secret"
 	dbName   = "myapp"
-	dsn      = "host=%s port=%d user=%s password=%s dbname=%s sslmode=disable timezone=UTC connect_timout=5"
+	dsn      = "host=%s port=%s user=%s password=%s dbname=%s sslmode=disable timezone=UTC connect_timeout=5"
 )
 
 var dummyUser = User{
@@ -69,9 +71,11 @@ func TestMain(m *testing.M) {
 
 	resource, err = pool.RunWithOptions(&opts)
 	if err != nil {
+
 		if err := pool.Purge(resource); err != nil {
 			log.Printf("Could not purge resource: %s", err)
 		}
+
 		log.Fatalf("Could not start resource: %s", err)
 	}
 
@@ -155,6 +159,7 @@ CREATE TABLE tokens (
     id SERIAL PRIMARY KEY,
     user_id integer NOT NULL REFERENCES users(id) ON DELETE CASCADE ON UPDATE CASCADE,
     first_name character varying(255) NOT NULL,
+	last_name character varying(255) NOT NULL,
     email character varying(255) NOT NULL,
     token character varying(255) NOT NULL,
     token_hash bytea NOT NULL,
@@ -193,9 +198,8 @@ func TestUser_Insert(t *testing.T) {
 	}
 }
 
-
 func TestUser_Get(t *testing.T) {
-	u, err : models.Users.Get(dummyUser.ID)
+	u, err := models.Users.Get(dummyUser.ID)
 	if err != nil {
 		t.Errorf("expected no error, got '%s'", err)
 	}
@@ -211,14 +215,10 @@ func TestUser_Get(t *testing.T) {
 	if u.Email != dummyUser.Email {
 		t.Errorf("expected email to be '%s', got '%s'", dummyUser.Email, u.Email)
 	}
-	if u.Password != dummyUser.Password {
-		t.Errorf("expected password to be '%s', got '%s'", dummyUser.Password, u.Password)
-	}
 	if u.Active != dummyUser.Active {
 		t.Errorf("expected active to be '%d', got '%d'", dummyUser.Active, u.Active)
 	}
 }
-
 
 func TestUser_GetAll(t *testing.T) {
 	users, err := models.Users.GetAll()
@@ -246,7 +246,7 @@ func TestUser_Update(t *testing.T) {
 		t.Errorf("expected no error, got '%s'", err)
 	}
 	u.FirstName = "Jane"
-	err = models.Users.Update(u)
+	err = models.Users.Update(*u)
 	if err != nil {
 		t.Errorf("expected no error, got '%s'", err)
 	}
@@ -256,5 +256,345 @@ func TestUser_Update(t *testing.T) {
 	}
 	if u2.FirstName != "Jane" {
 		t.Errorf("expected first name to be 'Jane', got '%s'", u2.FirstName)
-	}	
+	}
+}
+
+func TestUser_PasswordMatches(t *testing.T) {
+	u, err := models.Users.Get(dummyUser.ID)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	matches, err := u.PasswordMatches("password")
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if !matches {
+		t.Errorf("expected password to match")
+	}
+
+	matches, err = u.PasswordMatches("fakepassword")
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if matches {
+		t.Errorf("expected password not to match")
+	}
+}
+
+func TestUser_ResetPassword(t *testing.T) {
+	err := models.Users.UpdatePassword(1, "newpassword")
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	matches, err := u.PasswordMatches("newpassword")
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if !matches {
+		t.Errorf("expected password to match")
+	}
+
+	err = models.Users.UpdatePassword(2, "newpassword")
+	if err == nil {
+		t.Errorf("expected error setting Password for non-existend user , got nil")
+	}
+
+}
+
+func TestUser_Delete(t *testing.T) {
+	err := models.Users.Delete(dummyUser.ID)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	u, err := models.Users.Get(dummyUser.ID)
+	if err == nil {
+		t.Errorf("expected error getting deleted user, got nil")
+	}
+	if u != nil {
+		t.Errorf("expected user to be nil after delete, got '%v'", u)
+	}
+}
+
+func TestToken_Table(t *testing.T) {
+	s := models.Tokens.Table()
+	if s != "tokens" {
+		t.Errorf("expected table name to be 'tokens', got '%s'", s)
+	}
+}
+
+func TestToken_GenerateToken(t *testing.T) {
+	id, err := models.Users.Insert(dummyUser)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	token, err := models.Tokens.GenerateToken(id, 24*time.Hour)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if token.PlainText == "" {
+		t.Errorf("expected token to have a plain text value, got empty string")
+	}
+}
+
+func TestToken_Insert(t *testing.T) {
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	token, err := models.Tokens.GenerateToken(u.ID, 24*time.Hour)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	err = models.Tokens.Insert(*token, *u)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+}
+
+func TestToken_GetUserForToken(t *testing.T) {
+	token := "abcd1234"
+	_, err := models.Tokens.GetUserForToken(token)
+	if err == nil {
+		t.Errorf("expected error getting user for non-existent token, got nil")
+	}
+
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+
+	_, err = models.Tokens.GetUserForToken(u.Token.PlainText)
+	if err != nil {
+		t.Errorf("failed to get user for token: %s", err)
+	}
+
+}
+
+func TestToken_GetTokensForUser(t *testing.T) {
+	tokens, err := models.Tokens.GetTokensForUser(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if len(tokens) < 0 {
+		t.Error("expected tokens for user 1, got none")
+	}
+}
+
+func TestToken_Get(t *testing.T) {
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	token, err := models.Tokens.Get(u.Token.ID)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if token.ID != u.Token.ID {
+		t.Errorf("expected token ID to be '%d', got '%d'", u.Token.ID, token.ID)
+	}
+}
+
+func TestToken_GetByToken(t *testing.T) {
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	token, err := models.Tokens.GetByToken(u.Token.PlainText)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	if token.PlainText != u.Token.PlainText {
+		t.Errorf("expected token plain text to be '%s', got '%s'", u.Token.PlainText, token.PlainText)
+	}
+
+	_, err = models.Tokens.GetByToken("1234567890")
+	if err == nil {
+		t.Error("expected error but got none")
+	}
+
+}
+
+var authData = []struct {
+	name          string
+	token         string
+	email         string
+	errorExpected bool
+	message       string
+}{
+	{"invalid", "abcdefghijklmnopqrstuvwxyz", "aqhere@bla.blub", true, "expected error for invalid token"},
+	{"invalid_kength", "bcdefghijklmnopqrstuvwxy", "a@bla.blub", true, "expected error for invalid token length"},
+	{"no_user", "abcdefghijklmnopqrstuvwxyz", "a@bla.blub", true, "expected error for no user"},
+	{"valid", "abcdefghijklmnopqrstuvwxyz", "john.doe@example.com", false, "expected no error for valid token and user"},
+}
+
+func TestToken_AuthenticateToken(t *testing.T) {
+	for _, tt := range authData {
+		token := ""
+		if tt.email == dummyUser.Email {
+			user, err := models.Users.GetByEmail(tt.email)
+			if err != nil {
+				t.Errorf("expected no error, got '%s'", err)
+			}
+			token = user.Token.PlainText
+		} else {
+			token = tt.token
+		}
+		req, err := http.NewRequest("GET", "/test", nil)
+		if err != nil {
+			t.Errorf("expected no error, got '%s'", err)
+		}
+		req.Header.Add("Authorization", "Bearer "+token)
+		_, err = models.Tokens.AuthenticateToken(req)
+		if tt.errorExpected && err == nil {
+			t.Errorf("expected error for test case '%s', got nil", tt.name)
+		} else if !tt.errorExpected && err != nil {
+			t.Errorf("expected no error for test case '%s', got '%s'", tt.name, err)
+		} else {
+			t.Logf("test case '%s' passed: %s", tt.name, tt.message)
+		}
+	}
+}
+
+func TestToken_Delete(t *testing.T) {
+	u, err := models.Users.Get(1)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	err = models.Tokens.DeleteByToken(u.Token.PlainText)
+	if err != nil {
+		t.Errorf("expected no error, got '%s'", err)
+	}
+	_, err = models.Tokens.GetByToken(u.Token.PlainText)
+	if err == nil {
+		t.Errorf("expected error getting deleted token, got nil")
+	}
+}
+func TestToken_ExpiredToken(t *testing.T) {
+	// insert a token
+	u, err := models.Users.GetByEmail(dummyUser.Email)
+	if err != nil {
+		t.Error(err)
+	}
+
+	token, err := models.Tokens.GenerateToken(u.ID, -time.Hour*24) // expired token
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = models.Tokens.Insert(*token, *u)
+	if err != nil {
+		t.Error(err)
+	}
+
+	req, _ := http.NewRequest("GET", "/", nil)
+	req.Header.Add("Authorization", "Bearer "+token.PlainText)
+
+	_, err = models.Tokens.AuthenticateToken(req)
+	if err == nil {
+		t.Error("failed to catch expired token")
+	}
+
+}
+
+func TestToken_BadHeader(t *testing.T) {
+	req, _ := http.NewRequest("GET", "/", nil)
+	_, err := models.Tokens.AuthenticateToken(req)
+	if err == nil {
+		t.Error("failed to catch missing auth header")
+	}
+
+	req, _ = http.NewRequest("GET", "/", nil)
+	req.Header.Add("Authorization", "abc")
+	_, err = models.Tokens.AuthenticateToken(req)
+	if err == nil {
+		t.Error("failed to catch bad auth header")
+	}
+
+	newUser := User{
+		FirstName: "temp",
+		LastName:  "temp_last",
+		Email:     "you@there.com",
+		Active:    1,
+		Password:  "abc",
+	}
+
+	id, err := models.Users.Insert(newUser)
+	if err != nil {
+		t.Error(err)
+	}
+
+	token, err := models.Tokens.GenerateToken(id, 1*time.Hour)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = models.Tokens.Insert(*token, newUser)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = models.Users.Delete(id)
+	if err != nil {
+		t.Error(err)
+	}
+
+	req, _ = http.NewRequest("GET", "/", nil)
+	req.Header.Add("Authorization", "Bearer "+token.PlainText)
+	_, err = models.Tokens.AuthenticateToken(req)
+	if err == nil {
+		t.Error("failed to catch token for deleted user")
+	}
+
+}
+
+func TestToken_ValidToken(t *testing.T) {
+	u, err := models.Users.GetByEmail(dummyUser.Email)
+	if err != nil {
+		t.Error(err)
+	}
+
+	newToken, err := models.Tokens.GenerateToken(u.ID, 24*time.Hour)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = models.Tokens.Insert(*newToken, *u)
+	if err != nil {
+		t.Error(err)
+	}
+
+	okay, err := models.Tokens.ValidToken(newToken.PlainText)
+	if err != nil {
+		t.Error("error calling ValidToken: ", err)
+	}
+	if !okay {
+		t.Error("valid token reported as invalid")
+	}
+
+	okay, _ = models.Tokens.ValidToken("abc")
+	if okay {
+		t.Error("invalid token reported as valid")
+	}
+
+	u, err = models.Users.GetByEmail(dummyUser.Email)
+	if err != nil {
+		t.Error(err)
+	}
+
+	err = models.Tokens.Delete(u.Token.ID)
+	if err != nil {
+		t.Error(err)
+	}
+
+	okay, err = models.Tokens.ValidToken(u.Token.PlainText)
+	if err == nil {
+		t.Error(err)
+	}
+	if okay {
+		t.Error("no error reported when validating non-existent token")
+	}
 }

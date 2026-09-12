@@ -22,6 +22,11 @@ test:
 	@go test ./...
 	@echo "Done!"
 
+test-integration:
+	@echo "Testing integration..."
+	@go test -tags=integration ./...
+	@echo "Done!"
+
 start: run
 
 stop:
